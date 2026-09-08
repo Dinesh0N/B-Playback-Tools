@@ -15,7 +15,7 @@ A fast, video-editor-friendly playback speed control extension for Blender 5.2, 
 
 - **Variable Playback Speed Widget ("That Option")**:
   - Compact `[ 1.5x ⌵ ][ ↶ ]` widget in the timeline and sequencer playback controls bar.
-  - **Instant Presets**: `0.25x`, `0.5x`, `0.75x`, `1.0x (Normal)`, `1.25x`, `1.5x`, `1.75x`, `2.0x`, `2.5x`, `3.0x`, `4.0x`.
+  - **Instant Presets**: `0.25x`, `0.5x`, `0.75x`, `1.0x (Normal)`, `1.25x`, `1.5x`, `1.75x`, `2.0x`, `2.5x`, `3.0x`, `4.0x`. limit (`0.1x`to `16x`)
   - **Custom Speed Number Input**: Clean numeric entry field to type exact speed values (e.g. `1.25`, `1.75`, `2.5`, etc.).
   - **One-Click Reset `↶`**: Instantly return to `1.00x` standard speed.
 
@@ -29,15 +29,6 @@ A fast, video-editor-friendly playback speed control extension for Blender 5.2, 
   - **`Alt + Backspace`**: Reset speed to `1.00x`.
   - **Spacebar**: Standard Blender play/pause (cleanly pauses speed player when active).
   - **Optional J-K-L Shuttle**: Can be enabled in Add-on Preferences (disabled by default to preserve Blender's native `K` cut strip and `L` select linked keys).
-
----
-
-## Installation in Blender 5.2
-
-1. Located in your Blender 5.2 user extensions folder:
-   `~/.config/blender/5.2/extensions/user_default/playback tools/`
-2. Open Blender 5.2 -> **Edit > Preferences > Add-ons**.
-3. Search for **"Playback Speed Controls"** and ensure the checkbox is enabled.
 
 ---
 
