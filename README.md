@@ -26,11 +26,7 @@ A fast, video-editor-friendly playback speed control extension for Blender 5.2, 
 
 - **Hotkeys**:
   - **`]` & `[`**: Step forward or backward through speed presets.
-  - **`Alt + Backspace`**: Reset speed to `1.00x`.
   - **Spacebar**: Standard Blender play/pause (cleanly pauses speed player when active).
-  - **Optional J-K-L Shuttle**: Can be enabled in Add-on Preferences (disabled by default to preserve Blender's native `K` cut strip and `L` select linked keys).
-
----
 
 ## License
 GPL-3.0-or-later
