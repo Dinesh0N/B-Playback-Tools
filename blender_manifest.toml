@@ -1,0 +1,23 @@
+schema_version = "1.0.0"
+
+id = "b_playback_tools"
+version = "1.0.0"
+name = "B Playback Tools"
+tagline = "Variable timeline and VSE playback speed (0.1x - 16x) with pitch-preserved audio"
+
+maintainer = "Dinesh007"
+type = "add-on"
+tags = ["Sequencer", "Animation", "Video Editing"]
+
+blender_version_min = "4.2.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+copyright = [
+  "2026 Playback Tools Team",
+]
+
+[permissions]
+files = "Read audio and video files for pitch-corrected preview playback"
