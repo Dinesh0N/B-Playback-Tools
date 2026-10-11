@@ -4,10 +4,10 @@
 bl_info = {
     "name": "B Playback Tools",
     "author": "Dinesh007",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (4, 2, 0),
     "location": "Timeline & Sequencer Playback Controls, Playback Menu, Sidebar",
-    "description": "Variable timeline and VSE preview playback speed (0.25x - 4x) with pitch-preserved audio",
+    "description": "Variable timeline and VSE preview playback speed (0.25x - 16x) with pitch-preserved audio",
     "category": "Sequencer",
 }
 
@@ -170,12 +170,68 @@ def tag_redraw_all(context):
             area.tag_redraw()
 
 
+def is_strip_channel_muted(se, strip):
+    """Check if the channel containing the strip is muted (including parent meta strips)."""
+    if hasattr(se, "channels") and hasattr(strip, "channel"):
+        try:
+            ch_idx = strip.channel
+            if 0 <= ch_idx < len(se.channels):
+                if bool(se.channels[ch_idx].mute):
+                    return True
+        except Exception:
+            pass
+    try:
+        parent_func = getattr(strip, "parent_meta", None)
+        if callable(parent_func):
+            parent = parent_func()
+            if parent:
+                return bool(parent.mute) or is_strip_channel_muted(se, parent)
+    except Exception:
+        pass
+    return False
+
+
 def get_strip_timing(strip):
     """Return (start_frame, end_frame, trim_offset) compatible with Blender 4.2+ & 5.2."""
-    start = int(getattr(strip, "frame_final_start", getattr(strip, "content_start", 0)))
-    end = int(getattr(strip, "frame_final_end", getattr(strip, "content_end", start)))
-    offset = float(getattr(strip, "frame_offset_start", getattr(strip, "content_trim_start", 0.0)))
-    return start, end, offset
+    try:
+        start = int(getattr(strip, "frame_final_start", getattr(strip, "content_start", 0)))
+        end = int(getattr(strip, "frame_final_end", getattr(strip, "content_end", start)))
+        offset = float(getattr(strip, "frame_offset_start", getattr(strip, "content_trim_start", 0.0)))
+        return start, end, offset
+    except Exception:
+        return 0, 0, 0.0
+
+
+def get_sound_strips_fingerprint(scene):
+    """Generate a lightweight signature of all sound strips to detect movement or edits."""
+    if not scene or not scene.sequence_editor:
+        return ()
+
+    se = scene.sequence_editor
+    strips = getattr(se, "strips_all", getattr(se, "strips", getattr(se, "sequences", [])))
+
+    fp = []
+    for strip in strips:
+        try:
+            if strip.type != 'SOUND':
+                continue
+            s_start, s_end, s_offset = get_strip_timing(strip)
+            sound = getattr(strip, "sound", None)
+            fpath = sound.filepath if sound else ""
+            fp.append((
+                strip.as_pointer(),
+                s_start,
+                s_end,
+                s_offset,
+                bool(strip.mute),
+                is_strip_channel_muted(se, strip),
+                round(getattr(strip, "volume", 1.0), 2),
+                fpath,
+            ))
+        except (ReferenceError, Exception):
+            continue
+
+    return tuple(fp)
 
 
 def collect_active_sound_strips(scene, start_frame, end_frame):
@@ -188,26 +244,24 @@ def collect_active_sound_strips(scene, start_frame, end_frame):
 
     active_strips = []
     for strip in strips:
-        if strip.type != 'SOUND':
-            continue
-        if strip.mute:
-            continue
-        if not strip.sound or not strip.sound.filepath:
-            continue
+        try:
+            if strip.type != 'SOUND':
+                continue
+            if strip.mute:
+                continue
+            if not strip.sound or not strip.sound.filepath:
+                continue
 
-        if hasattr(se, "channels") and hasattr(strip, "channel"):
-            try:
-                ch = se.channels.get(strip.channel)
-                if ch and ch.mute:
-                    continue
-            except Exception:
-                pass
+            if is_strip_channel_muted(se, strip):
+                continue
 
-        s_start, s_end, s_offset = get_strip_timing(strip)
-        if s_end > start_frame and s_start < end_frame:
-            abs_path = bpy.path.abspath(strip.sound.filepath)
-            if os.path.isfile(abs_path):
-                active_strips.append((strip, abs_path, s_start, s_end, s_offset))
+            s_start, s_end, s_offset = get_strip_timing(strip)
+            if s_end > start_frame and s_start < end_frame:
+                abs_path = bpy.path.abspath(strip.sound.filepath)
+                if os.path.isfile(abs_path):
+                    active_strips.append((strip, abs_path, s_start, s_end, s_offset))
+        except (ReferenceError, Exception):
+            continue
 
     return active_strips
 
@@ -225,12 +279,38 @@ def is_scrubbing_operator_active(context):
         modal_ops = getattr(win, "modal_operators", None)
         if not modal_ops:
             return False
-        for op in modal_ops:
-            idname = getattr(op, "bl_idname", "").lower()
-            name = getattr(op, "name", "").lower()
-            rna_id = getattr(getattr(op, "rna_type", None), "identifier", "").lower()
-            if any(k in idname or k in name or k in rna_id for k in ("change_frame", "scrub")):
-                return True
+        for op in list(modal_ops):
+            try:
+                idname = getattr(op, "bl_idname", "").lower()
+                name = getattr(op, "name", "").lower()
+                rna_id = getattr(getattr(op, "rna_type", None), "identifier", "").lower()
+                if any(k in idname or k in name or k in rna_id for k in ("change_frame", "scrub")):
+                    return True
+            except (ReferenceError, Exception):
+                continue
+    except Exception:
+        pass
+    return False
+
+
+def is_transform_operator_active(context):
+    """Detect if Blender's native transform/translate/seq_slide/slip operator is currently active."""
+    try:
+        win = getattr(context, "window", None)
+        if not win:
+            return False
+        modal_ops = getattr(win, "modal_operators", None)
+        if not modal_ops:
+            return False
+        for op in list(modal_ops):
+            try:
+                idname = getattr(op, "bl_idname", "").lower()
+                name = getattr(op, "name", "").lower()
+                rna_id = getattr(getattr(op, "rna_type", None), "identifier", "").lower()
+                if any(k in idname or k in name or k in rna_id for k in ("transform", "translate", "seq_slide", "slip", "duplicate_move")):
+                    return True
+            except (ReferenceError, Exception):
+                continue
     except Exception:
         pass
     return False
@@ -260,6 +340,9 @@ class PLAYBACK_OT_speed_play_pause(Operator):
     is_scrubbing = False
     was_scrub_op_active = False
     last_scrub_time = 0.0
+    was_transform_op_active = False
+    last_sound_strips_fingerprint = ()
+    last_fp_check_time = 0.0
 
     def finish_scrub_and_resume(self, context):
         """Called when playhead scrubbing finishes to resume playback from the scrubbed frame."""
@@ -274,6 +357,8 @@ class PLAYBACK_OT_speed_play_pause(Operator):
 
         # 1. Stop playback cleanly on ESC or SPACE
         if event.type in {'ESC'}:
+            if is_transform_operator_active(context):
+                return {'PASS_THROUGH'}
             self.stop_playback(context)
             return {'FINISHED'}
 
@@ -281,7 +366,7 @@ class PLAYBACK_OT_speed_play_pause(Operator):
             self.stop_playback(context)
             return {'FINISHED'}
 
-        # 2. Track mouse click/drag for interactive timeline playhead scrubbing
+        # 2. Track mouse click/drag for interactive timeline playhead scrubbing & strip manipulation
         if event.type in {'LEFTMOUSE', 'RIGHTMOUSE'}:
             if event.value == 'PRESS':
                 self.mouse_pressed = True
@@ -291,6 +376,15 @@ class PLAYBACK_OT_speed_play_pause(Operator):
                 if self.is_scrubbing:
                     self.finish_scrub_and_resume(context)
                     return {'PASS_THROUGH'}
+                elif not self.reverse:
+                    # User released mouse outside playhead scrub (e.g. finished moving/dropping a strip)
+                    self.was_transform_op_active = False
+                    scene = context.scene
+                    current_fp = get_sound_strips_fingerprint(scene)
+                    if current_fp != self.last_sound_strips_fingerprint:
+                        self.last_sound_strips_fingerprint = current_fp
+                        self.restart_audio_at_current_frame(context)
+                        tag_redraw_all(context)
 
         if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
             if self.is_scrubbing and self.mouse_pressed:
@@ -304,6 +398,13 @@ class PLAYBACK_OT_speed_play_pause(Operator):
             scene = context.scene
             now = time.perf_counter()
             current_frame = scene.frame_current
+
+            if scene.use_preview_range:
+                self.range_start = scene.frame_preview_start
+                self.range_end = scene.frame_preview_end
+            else:
+                self.range_start = scene.frame_start
+                self.range_end = scene.frame_end
 
             scrub_op_active = is_scrubbing_operator_active(context)
 
@@ -345,7 +446,25 @@ class PLAYBACK_OT_speed_play_pause(Operator):
                 else:
                     return {'PASS_THROUGH'}
 
-            # C. Normal playback progression (runs immediately if not scrubbing)
+            # D. Strip movement & modification detection (adapts audio immediately even while dragging/moving strips)
+            if not self.reverse:
+                transform_op_active = is_transform_operator_active(context)
+                just_finished_transform = self.was_transform_op_active and not transform_op_active
+                self.was_transform_op_active = transform_op_active
+
+                # Check interval: 0.06s while actively dragging/transforming (smooth real-time audio adaptation without stutter),
+                # 0.04s during normal playback, or immediately (0s delay) when transform finishes
+                check_interval = 0.06 if transform_op_active else 0.04
+                if just_finished_transform or (now - self.last_fp_check_time >= check_interval):
+                    self.last_fp_check_time = now
+                    current_fp = get_sound_strips_fingerprint(scene)
+                    if current_fp != self.last_sound_strips_fingerprint:
+                        self.last_sound_strips_fingerprint = current_fp
+                        self.restart_audio_at_current_frame(context)
+                        tag_redraw_all(context)
+                        now = time.perf_counter()
+
+            # E. Normal playback progression (runs immediately if not scrubbing)
             speed = self.playback_speed
             elapsed_wall_seconds = max(0.0, now - self.start_wall_time)
             timeline_elapsed = elapsed_wall_seconds * speed
@@ -396,6 +515,13 @@ class PLAYBACK_OT_speed_play_pause(Operator):
         self.playback_speed = speed
         self.fps = scene.render.fps / max(1e-6, scene.render.fps_base)
 
+        if scene.use_preview_range:
+            self.range_start = scene.frame_preview_start
+            self.range_end = scene.frame_preview_end
+        else:
+            self.range_start = scene.frame_start
+            self.range_end = scene.frame_end
+
         if self.handle:
             try:
                 self.handle.stop()
@@ -431,7 +557,7 @@ class PLAYBACK_OT_speed_play_pause(Operator):
                 end = (s_end - current_frame) / self.fps
 
             if end > begin:
-                seq.add(snd, begin, end, skip)
+                seq.add(snd, begin, end, max(0.0, skip))
                 added_count += 1
 
         if added_count == 0:
@@ -458,10 +584,12 @@ class PLAYBACK_OT_speed_play_pause(Operator):
             self.has_sound = False
 
     def restart_audio_at_current_frame(self, context):
-        """Seamlessly restart audio stream when speed changes or scrubbing occurs."""
+        """Seamlessly restart audio stream when speed changes, strips move, or scrubbing occurs."""
         scene = context.scene if context and context.scene else bpy.context.scene
         self.start_frame = scene.frame_current
         self.last_set_frame = self.start_frame
+        self.last_sound_strips_fingerprint = get_sound_strips_fingerprint(scene)
+        self.last_fp_check_time = time.perf_counter()
         if not self.reverse:
             self.start_audio_stream(context, self.start_frame)
         self.start_wall_time = time.perf_counter()
@@ -497,6 +625,9 @@ class PLAYBACK_OT_speed_play_pause(Operator):
         self.is_scrubbing = False
         self.was_scrub_op_active = False
         self.last_scrub_time = 0.0
+        self.was_transform_op_active = False
+        self.last_sound_strips_fingerprint = get_sound_strips_fingerprint(scene)
+        self.last_fp_check_time = time.perf_counter()
 
         _PREV_AUDIO_SCRUB = scene.use_audio_scrub
         scene.use_audio_scrub = False
@@ -538,6 +669,8 @@ class PLAYBACK_OT_speed_play_pause(Operator):
         self.is_scrubbing = False
         self.was_scrub_op_active = False
         self.last_scrub_time = 0.0
+        self.was_transform_op_active = False
+        self.last_sound_strips_fingerprint = ()
 
         if self.handle:
             try:
@@ -546,16 +679,27 @@ class PLAYBACK_OT_speed_play_pause(Operator):
                 pass
             self.handle = None
 
-        if self._timer and context.window_manager:
-            context.window_manager.event_timer_remove(self._timer)
+        wm = getattr(context, "window_manager", None) or getattr(bpy.context, "window_manager", None)
+        if self._timer and wm:
+            try:
+                wm.event_timer_remove(self._timer)
+            except Exception:
+                pass
             self._timer = None
 
-        if _PREV_AUDIO_SCRUB is not None and context.scene:
-            context.scene.use_audio_scrub = _PREV_AUDIO_SCRUB
+        scene = getattr(context, "scene", None) or getattr(bpy.context, "scene", None)
+        if _PREV_AUDIO_SCRUB is not None and scene:
+            try:
+                scene.use_audio_scrub = _PREV_AUDIO_SCRUB
+            except Exception:
+                pass
             _PREV_AUDIO_SCRUB = None
 
-        settings = get_settings(context)
-        settings.is_playing = False
+        try:
+            settings = get_settings(context)
+            settings.is_playing = False
+        except Exception:
+            pass
         _ACTIVE_PLAYBACK_OP = None
         tag_redraw_all(context)
 
